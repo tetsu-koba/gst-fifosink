@@ -121,8 +121,14 @@ static gboolean
 gst_file_sink_set_location (GstFifoSink * sink, const gchar * location,
     GError ** error)
 {
-  if (sink->fd > 2)
-    goto was_open;
+  if (sink->fd > 2) {
+    g_warning ("Changing the `location' property on filesink when a file is "
+        "open is not supported.");
+    g_set_error (error, GST_URI_ERROR, GST_URI_ERROR_BAD_STATE,
+        "Changing the 'location' property on filesink when a file is "
+        "open is not supported");
+    return FALSE;
+  }
 
   g_free (sink->filename);
   g_free (sink->uri);
@@ -139,17 +145,6 @@ gst_file_sink_set_location (GstFifoSink * sink, const gchar * location,
   }
 
   return TRUE;
-
-  /* ERRORS */
-was_open:
-  {
-    g_warning ("Changing the `location' property on filesink when a file is "
-        "open is not supported.");
-    g_set_error (error, GST_URI_ERROR, GST_URI_ERROR_BAD_STATE,
-        "Changing the 'location' property on filesink when a file is "
-        "open is not supported");
-    return FALSE;
-  }
 }
 
 void
@@ -214,8 +209,12 @@ gst_fifosink_open_file (GstFifoSink * sink)
   }
 
   int fd = open (sink->filename, O_WRONLY);
-  if (fd < 0)
-    goto open_failed;
+  if (fd < 0) {
+    GST_ELEMENT_ERROR (sink, RESOURCE, OPEN_WRITE,
+        (("Could not open file \"%s\" for writing."), sink->filename),
+        GST_ERROR_SYSTEM);
+    return FALSE;
+  }
   sink->fd = fd;
 
   struct stat st;
@@ -234,15 +233,6 @@ gst_fifosink_open_file (GstFifoSink * sink)
     return FALSE;
   }
   return TRUE;
-
-  /* ERRORS */
-open_failed:
-  {
-    GST_ELEMENT_ERROR (sink, RESOURCE, OPEN_WRITE,
-        (("Could not open file \"%s\" for writing."), sink->filename),
-        GST_ERROR_SYSTEM);
-    return FALSE;
-  }
 }
 
 static void
@@ -383,7 +373,23 @@ gst_writev_buffers (GstObject * sink, gint fd, GstPoll * fdset,
       if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
         /* do nothing, try again */
       } else if (ret < 0) {
-        goto write_error;
+        {
+          switch (errno) {
+            case ENOSPC:
+              GST_ELEMENT_ERROR (sink, RESOURCE, NO_SPACE_LEFT, (NULL), (NULL));
+              break;
+            default:{
+              GST_ELEMENT_ERROR (sink, RESOURCE, WRITE, (NULL),
+                  ("Error while writing to file descriptor %d: %s",
+                      fd, g_strerror (errno)));
+            }
+          }
+          flow_ret = GST_FLOW_ERROR;
+          for (i = 0; i < total_mem_num; ++i)
+            gst_memory_unmap (map_infos[i].memory, &map_infos[i]);
+
+          return flow_ret;
+        }
       } else if (ret < left) {
         /* skip vectors that have been written in full */
         while (ret >= vecs[0].iov_len) {
@@ -406,28 +412,10 @@ gst_writev_buffers (GstObject * sink, gint fd, GstPoll * fdset,
 
   flow_ret = GST_FLOW_OK;
 
-out:
-
   for (i = 0; i < total_mem_num; ++i)
     gst_memory_unmap (map_infos[i].memory, &map_infos[i]);
 
   return flow_ret;
-
-write_error:
-  {
-    switch (errno) {
-      case ENOSPC:
-        GST_ELEMENT_ERROR (sink, RESOURCE, NO_SPACE_LEFT, (NULL), (NULL));
-        break;
-      default:{
-        GST_ELEMENT_ERROR (sink, RESOURCE, WRITE, (NULL),
-            ("Error while writing to file descriptor %d: %s",
-                fd, g_strerror (errno)));
-      }
-    }
-    flow_ret = GST_FLOW_ERROR;
-    goto out;
-  }
 }
 
 static GstFlowReturn
@@ -480,8 +468,10 @@ gst_fifosink_render_list (GstBaseSink * bsink, GstBufferList * buffer_list)
   GST_DEBUG_OBJECT (sink, "render_list");
 
   num_buffers = gst_buffer_list_length (buffer_list);
-  if (num_buffers == 0)
-    goto no_data;
+  if (num_buffers == 0) {
+    GST_LOG_OBJECT (sink, "empty buffer list");
+    return GST_FLOW_OK;
+  }
 
   /* extract buffers from list and count memories */
   buffers = g_newa (GstBuffer *, num_buffers);
@@ -497,12 +487,6 @@ gst_fifosink_render_list (GstBaseSink * bsink, GstBufferList * buffer_list)
       total_mems);
 
   return flow;
-
-no_data:
-  {
-    GST_LOG_OBJECT (sink, "empty buffer list");
-    return GST_FLOW_OK;
-  }
 }
 
 static gboolean
