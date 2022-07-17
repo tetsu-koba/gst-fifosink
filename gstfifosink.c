@@ -392,7 +392,7 @@ gst_writev_buffers (GstObject * sink, gint fd, GstPoll * fdset,
         }
       } else if (ret < left) {
         /* skip vectors that have been written in full */
-        while (ret >= vecs[0].iov_len) {
+        while ((size_t) ret >= vecs[0].iov_len) {
           ret -= vecs[0].iov_len;
           left -= vecs[0].iov_len;
           ++vecs;

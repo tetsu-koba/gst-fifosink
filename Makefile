@@ -4,7 +4,7 @@ DEPFILES = $(OBJS:%.o=%.d)
 
 CC = gcc
 PACKAGES = gstreamer-1.0 gstreamer-base-1.0
-CFLAGS = -Wall -fPIC $(shell pkg-config --cflags $(PACKAGES))
+CFLAGS = -W -fPIC -O2 $(shell pkg-config --cflags $(PACKAGES))
 CPPFLAGS = -MMD
 LDLIBS = $(shell pkg-config --libs $(PACKAGES))
 
